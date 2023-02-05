@@ -1,40 +1,59 @@
 var jwt = require("jsonwebtoken");
 const bcrypt = require("bcrypt");
 
+const coreRequestModel = require("../model/serviceModel/user");
+const joiValidationModel = require("../model/validationModel/user");
+
 const nodemailer = require("nodemailer");
 const UserSchema = require("../model/user");
 const saltRounds = 10;
 
 const loginUser = async (req, res) => {
-  const existingUser = await UserSchema.findOne({
-    $or: [{ email: req.body.email }, { phone: req.body.phone }],
-  });
+
+  let userLoginDetailsRequest = new coreRequestModel.loginRequest(req);
+  let validateRequest = joiValidationModel.userLogin(userLoginDetailsRequest);
+
+  if (validateRequest.error) {
+    throw new Error(validateRequest.error.message);
+  }
+
+  try {
+  const existingUser = await UserSchema.findOne({$or: [{ email: req.body.email }, { phone: req.body.phone }]});
   if (existingUser) {
     const comparePassword = await bcrypt.compare(
       req.body.password,
       existingUser.password
     );
-
     if (comparePassword == false) {
       throw new Error(`Entered Password is Wrong!`);
     } else {
       var token = jwt.sign({ id: existingUser._id }, "mongoproject", {
         expiresIn: 86400, // expires in 24 hours
       });
-
-      return { existingUser, token };
+      }
     }
-  } else {
-    throw new Error("Wrong Email/Number");
+    return {token, existingUser};
+
+  } catch (errUserLogin) {
+    throw new Error(errUserLogin.message);
   }
 };
 
+
 const registerUser = async (req, res) => {
+
+  let userRegisterDetailsRequest = new coreRequestModel.registerRequest(req);
+  let validateRequest = joiValidationModel.userRegister(userRegisterDetailsRequest);
+
+  if (validateRequest.error) {
+    throw new Error(validateRequest.error.message);
+  }
+
   //Check if user is already registered
   try {
     const existingUser = await UserSchema.findOne({ email: req.body.email });
     if (existingUser) {
-      throw new Error("User Already exist", 400);
+      throw new Error(`User Already exist!`);
     } else {
       let newUser = new UserSchema();
       newUser.name = req.body.name;
@@ -75,40 +94,55 @@ const registerUser = async (req, res) => {
 
       transporter.sendMail(mailOptions, function (error, info) {
         if (error) {
-          throw new Error(error);
+        return{ code: 500, message: error.message };
         } else {
-          return "Email sent: " + info.response;
+          let message = "Email Sent. Please Check your Email"
+          return {message}
         }
       });
-      return { saveUser, token };
+    return {token, saveUser};
+
     }
-  } catch (err) {
-    throw err;
+  } catch (errRegister) {
+    throw new Error(errRegister.message);
   }
 };
 
 const editUsers = async (req) => {
   
+  let editUsersRequest = new coreRequestModel.editUsersRequest(req);
+  let validateRequest = joiValidationModel.editUsers(editUsersRequest);
+
+  if (validateRequest.error) {
+    throw new Error(validateRequest.error.message);
+  }
+
   try{
     const editUser = await UserSchema.updateOne(
-    {
-      _id: req.query.id,
-    },
-    { $set: req.body }
+    {_id: req.query.id},
+    {$set: req.body}
   );
+  return {editUser};
 
-  return editUser;
-  } catch (err){
-    throw err
+  } catch (errEditUser){
+    throw new Error(errEditUser.message);
   }
 };
 
 const changePassword = async (req) => {
-  try{
+
+  let changePasswordRequest = new coreRequestModel.changePasswordRequest(req);
+  let validateRequest = joiValidationModel.changePassword(changePasswordRequest);
+
+  if (validateRequest.error) {
+    throw new Error(validateRequest.error.message);
+  }
+
+  try {
   var hashedPassword = await bcrypt.hash(req.body.password, saltRounds);
   await UserSchema.updateOne(
     {
-      _id: id,
+      _id: req.query.id,
     },
     {
       $set: {
@@ -116,18 +150,26 @@ const changePassword = async (req) => {
       },
     }
   );
-  return { status: "Password has been changed! close the window!" };
-  } catch (err){
-    throw err
+  return { message: "Password has been changed! close the window!" };
+  } catch (errChangePassword){
+    throw new Error(errChangePassword.message);
   }
 };
 
 const forgotUser = async (req, res) => {
+  let forgotPasswordRequest = new coreRequestModel.forgotRequest(req);
+  let validateRequest = joiValidationModel.forgotPassword(forgotPasswordRequest);
+
+  if (validateRequest.error) {
+  throw new Error(validateRequest.error.message);
+  }
+
   try {
     const existingUser = await UserSchema.findOne({ email: req.query.email });
 
     if (!existingUser) {
-      throw new Error("No User Found")
+      let message = 'User does not exist'
+      throw new Error(message);
     }
     var secret = "mongoproject" + existingUser.password;
     var token = jwt.sign(
@@ -156,46 +198,73 @@ const forgotUser = async (req, res) => {
 
     transporter.sendMail(mailOptions, function (error, info) {
       if (error) {
-        throw error
+      throw new Error(error.message);
       } else {
-        return "Email sent: " + info.response;
+        let message = "Email Sent. Please Check your Email"
+        return {message}
       }
     });
-  } catch (err) {
-    throw err
+    
+  } catch (errForgotPassword) {
+    throw new Error(errForgotPassword.message);
   }
 };
 
 const forgotUserVerify = async (req, res) => {
+
+  let forgotPasswordRequest = new coreRequestModel.forgotVerifyRequest(req);
+  let validateRequest = joiValidationModel.forgotVerify(forgotPasswordRequest);
+
+  if (validateRequest.error) {
+    throw new Error(validateRequest.error.message);
+  }
+
+  try {
   const { id, token } = req.params;
   const { password } = req.body;
   const existingUser = await UserSchema.findOne({ _id: id });
   if (!existingUser) {
-    return res.status(400).json("user does not exist");
+    let message = 'User Does Not Exist'
+    throw new Error(message);
   }
   const secret = "mongoproject" + existingUser.password;
 
-  try {
-
     jwt.verify(token, secret, async function (err, decoded) {
       if (err) {
-        throw err;
+        return{ code: 500, message: err.message };
       }
       var hashedPassword = await bcrypt.hash(password, saltRounds);
       const userDetails = await UserSchema.updateOne(
-        {
-          _id: id,
-        },
+        {_id: id,},
         {
           $set: {
             password: hashedPassword,
           },
         }
       );
-      return userDetails
     });
-  } catch (err) { 
-    throw err
+    return {existingUser};
+
+  } catch (errVerifyForgot) { 
+    throw new Error(errVerifyForgot.message);
+  }
+};
+
+const logoutUser = async (req, res) => {
+
+  let userLogoutDetailsRequest = new coreRequestModel.logoutRequest(req);
+  let validateRequest = joiValidationModel.userLogout(userLogoutDetailsRequest);
+
+  if (validateRequest.error) {
+    throw new Error(validateRequest.error.message);
+  }
+
+  try {
+    const token = req.headers.token + "invalid"
+    return {token};
+
+  } catch (errUserLogout) {
+    throw new Error(errUserLogout.message);
   }
 };
 
@@ -206,4 +275,5 @@ module.exports = {
   forgotUser,
   forgotUserVerify,
   changePassword,
+  logoutUser
 };
